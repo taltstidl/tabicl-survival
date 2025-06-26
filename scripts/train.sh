@@ -7,16 +7,16 @@ export http_proxy=http://proxy:80
 export https_proxy=http://proxy:80
 
 cd $HOME/tabicl-survival
-module load cuda/12.6.2
+module load cuda/12.6.1
 module load python/3.12-conda
 source $WORK/venvs/tabicl-survival/bin/activate
 
 # from sample scripts
-torchrun --standalone --nproc_per_node=1 /path/to/tabicl/train/run.py \
+torchrun --standalone --nproc_per_node=1 src/train/run.py \
             --wandb_log True \
             --wandb_project TabICL \
             --wandb_name Stage1 \
-            --wandb_dir /my/wandb/dir \
+            --wandb_dir wandb \
             --wandb_mode online \
             --device cuda \
             --dtype float32 \
@@ -50,6 +50,6 @@ torchrun --standalone --nproc_per_node=1 /path/to/tabicl/train/run.py \
             --icl_nhead 4 \
             --ff_factor 2 \
             --norm_first True \
-            --checkpoint_dir /my/stage1/checkpoint/dir \
+            --checkpoint_dir stage1/checkpoint/dir \
             --save_temp_every 50 \
             --save_perm_every 5000
