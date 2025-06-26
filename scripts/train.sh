@@ -12,7 +12,7 @@ module load python/3.12-conda
 source $WORK/venvs/tabicl-survival/bin/activate
 
 # from sample scripts
-torchrun --standalone --nproc_per_node=1 src/train/run.py \
+torchrun --standalone --nproc_per_node=1 src/tabicl/train/run.py \
             --wandb_log True \
             --wandb_project TabICL \
             --wandb_name Stage1 \
