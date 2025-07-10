@@ -86,6 +86,51 @@ class OneHotAndLinear(nn.Linear):
         return F.linear(one_hot, self.weight, self.bias)
 
 
+class SurvivalEmbedding(nn.Module):
+    """Uses sinusoidal encoding to encode the time-to-event, followed by a learnable embedding
+    dependent on whether event was observed or not.
+
+    Parameters
+    ----------
+    embed_dim : int
+        Output embedding dimension
+    """
+
+    def __init__(self, embed_dim: int):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.event_encoder = nn.Linear(embed_dim, embed_dim)
+        self.dropout_encoder = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, src: Tensor) -> Tensor:
+        """ Transform event indicators and times to dense embeddings.
+
+        Parameters
+        ----------
+        src: Tensor
+            Float tensor of shape (batch_size, sequence_length, 2) containing event indicators and times
+
+        Returns
+        -------
+        Tensor
+            Embedded representation of shape (batch_size, sequence_length, embed_dim)
+        """
+        src_event, src_time = src[:, :, 0], src[:, :, 1]
+        time_embedding = SurvivalEmbedding._time_embedding(src_time, self.embed_dim)
+        embedding = torch.empty(src.shape[0], src.shape[1], self.embed_dim, device=src.device, dtype=src.dtype)
+        embedding[src_event == 1] = self.dropout_encoder(time_embedding[src_event == 1])
+        embedding[src_event == 0] = self.dropout_encoder(time_embedding[src_event == 0])
+        return embedding
+
+    @staticmethod
+    def _time_embedding(x, embed_dim):
+        x = x.unsqueeze(-1)
+        i = torch.arange(embed_dim, device=x.device).float()
+        angle_rates = x / (10000 ** (2 * (i // 2) / embed_dim))
+        embedding = torch.where(i % 2 == 0, torch.sin(angle_rates), torch.cos(angle_rates))
+        return embedding
+
+
 class SkippableLinear(nn.Linear):
     """Linear layer that handles inputs where all values equal `skip_value`.
 

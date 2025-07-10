@@ -5,7 +5,7 @@ import math
 import torch
 from torch import nn, Tensor
 
-from .layers import ClassNode, OneHotAndLinear
+from .layers import ClassNode, OneHotAndLinear, SurvivalEmbedding
 from .encoders import Encoder
 from .inference import InferenceManager
 from .inference_config import MgrConfig
@@ -47,6 +47,9 @@ class ICLearning(nn.Module):
 
     norm_first : bool, default=True
         If True, uses pre-norm architecture (LayerNorm before attention and feedforward)
+
+    target_type: str, default="class"
+        Type of target to choose correct y encoder: 'class' (default), or 'surv'
     """
 
     def __init__(
@@ -59,6 +62,7 @@ class ICLearning(nn.Module):
         dropout: float = 0.0,
         activation: str | callable = "gelu",
         norm_first: bool = True,
+        target_type: str = "class",
     ):
         super().__init__()
         self.max_classes = max_classes
@@ -76,7 +80,13 @@ class ICLearning(nn.Module):
         if self.norm_first:
             self.ln = nn.LayerNorm(d_model)
 
-        self.y_encoder = OneHotAndLinear(max_classes, d_model)
+        self.y_encoder = None
+        if target_type == "class":
+            self.y_encoder = OneHotAndLinear(max_classes, d_model)
+        if target_type == "surv":
+            self.y_encoder = SurvivalEmbedding(d_model)
+        if self.y_encoder is None:
+            raise ValueError("Could not find suitable encoder for target type " + target_type)
         self.decoder = nn.Sequential(nn.Linear(d_model, d_model * 2), nn.GELU(), nn.Linear(d_model * 2, max_classes))
 
         self.inference_mgr = InferenceManager(enc_name="tf_icl", out_dim=max_classes)

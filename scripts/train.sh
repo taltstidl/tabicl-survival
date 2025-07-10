@@ -22,13 +22,14 @@ torchrun --standalone --nproc_per_node=1 src/tabicl/train/run.py \
             --dtype float32 \
             --np_seed 42 \
             --torch_seed 42 \
-            --max_steps 100000 \
+            --max_steps 1000 \
             --batch_size 512 \
             --micro_batch_size 4 \
             --lr 1e-4 \
             --scheduler cosine_warmup \
             --warmup_proportion 0.02 \
             --gradient_clipping 1.0 \
+            --target_type surv \
             --prior_type mix_scm \
             --prior_device cpu \
             --batch_size_per_gp 4 \

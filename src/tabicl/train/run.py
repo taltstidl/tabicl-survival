@@ -17,6 +17,8 @@ from torch.utils.data import DataLoader
 from torch.multiprocessing import set_start_method
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+from torchsurv.loss import cox
+from torchsurv.metrics.cindex import ConcordanceIndex
 
 from tqdm import tqdm
 import wandb
@@ -169,7 +171,8 @@ class Trainer:
         """Build and initialize the TabICL model."""
 
         self.model_config = {
-            "max_classes": self.config.max_classes,
+            # Classification target requires multiple outputs, regression & survival analysis only one
+            "max_classes": self.config.max_classes if self.config.target_type == "class" else 1,
             "embed_dim": self.config.embed_dim,
             "col_num_blocks": self.config.col_num_blocks,
             "col_nhead": self.config.col_nhead,
@@ -184,6 +187,7 @@ class Trainer:
             "dropout": self.config.dropout,
             "activation": self.config.activation,
             "norm_first": self.config.norm_first,
+            "target_type": self.config.target_type,
         }
 
         model = TabICL(**self.model_config)
@@ -245,6 +249,7 @@ class Trainer:
                 max_train_size=self.config.max_train_size,
                 replay_small=self.config.replay_small,
                 prior_type=self.config.prior_type,
+                target_type=self.config.target_type,
                 device=self.config.prior_device,
                 n_jobs=1,  # Set to 1 to avoid nested parallelism during DDP
             )
@@ -579,9 +584,18 @@ class Trainer:
 
         with self.amp_ctx:
             pred = self.model(micro_X, y_train, micro_d)  # (B, test_size, max_classes)
-            pred = pred.flatten(end_dim=-2)
-            true = y_test.long().flatten()
-            loss = F.cross_entropy(pred, true)
+            if self.config.target_type == "class":
+                pred = pred.flatten(end_dim=-2)
+                true = y_test.long().flatten()
+                loss = F.cross_entropy(pred, true)
+            if self.config.target_type == "surv":
+                pred = pred.squeeze(-1)
+                true_event, true_time = y_test[:, :, 0].bool(), y_test[:, :, 1].float()
+                # torchsurv produces warnings in case of ties, ignore them here as they are handled using Efron's method
+                with warnings.catch_warnings(action="ignore"):
+                    # We need to compute NLL individually for each dataset, as it depends on each dataset's risk set
+                    loss = torch.stack([cox.neg_partial_log_likelihood(pred[i], true_event[i], true_time[i])
+                                        for i in range(pred.shape[0])]).mean()
 
         # Scale loss for gradient accumulation and backpropagate
         scaled_loss = loss / num_micro_batches
@@ -589,9 +603,16 @@ class Trainer:
 
         with torch.no_grad():
             micro_results = {}
-            micro_results["ce"] = scaled_loss.item()
-            accuracy = (pred.argmax(dim=1) == true).sum() / len(true)
-            micro_results["accuracy"] = accuracy.item() / num_micro_batches
+            if self.config.target_type == "class":
+                micro_results["ce"] = scaled_loss.item()
+                accuracy = (pred.argmax(dim=1) == true).sum() / len(true)
+                micro_results["accuracy"] = accuracy.item() / num_micro_batches
+            if self.config.target_type == "surv":
+                micro_results["npll"] = scaled_loss.item()
+                # We need to evaluate C index individually for each dataset, as it depends on each dataset's risk set
+                c_index = torch.stack([ConcordanceIndex()(pred[i], true_event[i], true_time[i])
+                                      for i in range(pred.shape[0])]).mean()
+                micro_results["c_index"] = c_index.item() / num_micro_batches
 
         return micro_results
 
@@ -629,7 +650,11 @@ class Trainer:
         micro_batches = [torch.split(t, self.config.micro_batch_size, dim=0) for t in batch]
         micro_batches = list(zip(*micro_batches))
 
-        results = {"ce": 0.0, "accuracy": 0.0}
+        results = {}
+        if self.config.target_type == "class":
+            results = {"ce": 0.0, "accuracy": 0.0}
+        if self.config.target_type == "surv":
+            results = {"npll": 0.0, "c_index": 0.0}
         failed_batches = 0
 
         for idx, micro_batch in enumerate(micro_batches):
