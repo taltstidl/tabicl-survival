@@ -263,8 +263,8 @@ class Reg2Surv(nn.Module):
 
         # Assume y[:, 0] is time-to-event and y[:, 1] is time-to-dropout
         y_event = y[:, 0] < y[:, 1]
-        if y_event.sum() == 0:
-            y_event = ~y_event  # ensure that there's always at least one event
+        if y_event.sum() < y.shape[0] // 4:
+            y_event = ~y_event  # ensure that there's always at least 25% events
         y_time = torch.min(y[:, 0], y[:, 1])
         y_time = (y_time - y_time.min()) / (y_time.max() - y_time.min())
 

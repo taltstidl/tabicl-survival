@@ -118,16 +118,19 @@ class SurvivalEmbedding(nn.Module):
         src_event, src_time = src[:, :, 0], src[:, :, 1]
         time_embedding = SurvivalEmbedding._time_embedding(src_time, self.embed_dim)
         embedding = torch.empty(src.shape[0], src.shape[1], self.embed_dim, device=src.device, dtype=src.dtype)
-        embedding[src_event == 1] = self.dropout_encoder(time_embedding[src_event == 1])
+        embedding[src_event == 1] = self.event_encoder(time_embedding[src_event == 1])
         embedding[src_event == 0] = self.dropout_encoder(time_embedding[src_event == 0])
         return embedding
 
     @staticmethod
     def _time_embedding(x, embed_dim):
         x = x.unsqueeze(-1)
-        i = torch.arange(embed_dim, device=x.device).float()
-        angle_rates = x / (10000 ** (2 * (i // 2) / embed_dim))
-        embedding = torch.where(i % 2 == 0, torch.sin(angle_rates), torch.cos(angle_rates))
+        assert embed_dim % 2 == 0, "Embedding dimension must be divisible by 2, got " + embed_dim
+        i = torch.arange(embed_dim // 2, device=x.device).float()
+        n = torch.tensor(10000)
+        div_term = torch.exp((2 * i / embed_dim) * torch.log(n))
+        # Scale by 500 to yield useful embeddings
+        embedding = torch.concat([torch.sin(500 * x / div_term), torch.cos(500* x / div_term)], dim=-1)
         return embedding
 
 

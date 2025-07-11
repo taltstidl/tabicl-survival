@@ -1,5 +1,6 @@
 #!/bin/bash -l
-#SBATCH --gres=gpu:a40:4
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:a40:2
 #SBATCH --time=24:00:00
 
 # for web access
@@ -12,7 +13,7 @@ module load python/3.12-conda
 source $WORK/venvs/tabicl-survival/bin/activate
 
 # from sample scripts
-torchrun --standalone --nproc_per_node=1 src/tabicl/train/run.py \
+torchrun --standalone --nproc_per_node=2 src/tabicl/train/run.py \
             --wandb_log True \
             --wandb_project TabICL \
             --wandb_name Stage1 \
@@ -51,6 +52,6 @@ torchrun --standalone --nproc_per_node=1 src/tabicl/train/run.py \
             --icl_nhead 4 \
             --ff_factor 2 \
             --norm_first True \
-            --checkpoint_dir stage1/checkpoint/dir \
+            --checkpoint_dir stage1-surv \
             --save_temp_every 50 \
             --save_perm_every 5000
