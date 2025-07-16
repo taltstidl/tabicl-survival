@@ -24,6 +24,7 @@ from tqdm import tqdm
 import wandb
 
 from tabicl import TabICL
+from tabicl.model.losses import mean_squared_error_and_rank
 from tabicl.prior.dataset import PriorDataset
 from tabicl.prior.genload import LoadPriorDataset
 from tabicl.train.optim import get_scheduler
@@ -594,8 +595,9 @@ class Trainer:
                 # torchsurv produces warnings in case of ties, ignore them here as they are handled using Efron's method
                 with warnings.catch_warnings(action="ignore"):
                     # We need to compute NLL individually for each dataset, as it depends on each dataset's risk set
-                    loss = torch.stack([cox.neg_partial_log_likelihood(pred[i], true_event[i], true_time[i])
-                                        for i in range(pred.shape[0])]).mean()
+                    # loss = torch.stack([cox.neg_partial_log_likelihood(pred[i], true_event[i], true_time[i])
+                    #                     for i in range(pred.shape[0])]).mean()
+                    loss = mean_squared_error_and_rank(pred, true_event, true_time)
 
         # Scale loss for gradient accumulation and backpropagate
         scaled_loss = loss / num_micro_batches
@@ -610,7 +612,7 @@ class Trainer:
             if self.config.target_type == "surv":
                 micro_results["npll"] = scaled_loss.item()
                 # We need to evaluate C index individually for each dataset, as it depends on each dataset's risk set
-                c_index = torch.stack([ConcordanceIndex()(pred[i], true_event[i], true_time[i])
+                c_index = torch.stack([ConcordanceIndex()(-pred[i], true_event[i], true_time[i])
                                       for i in range(pred.shape[0])]).mean()
                 micro_results["c_index"] = c_index.item() / num_micro_batches
 
