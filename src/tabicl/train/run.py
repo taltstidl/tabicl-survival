@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import timeit
 import warnings
 import functools
@@ -34,6 +35,17 @@ from tabicl.train.train_config import build_parser
 warnings.filterwarnings(
     "ignore", message=".*The PyTorch API of nested tensors is in prototype stage.*", category=UserWarning
 )
+
+
+class KillGuard:
+    is_killed = False
+
+    def __init__(self):
+        signal.signal(signal.SIGINT, self.exit_gracefully)
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+    def exit_gracefully(self, signum, frame):
+        self.is_killed = True
 
 
 class Timer:
@@ -429,6 +441,9 @@ class Trainer:
         else:
             step_progress = range(self.curr_step, self.config.max_steps)
 
+        # Allows for graceful exiting when killed, e.g., due to time limit
+        kill_guard = KillGuard()
+
         dataloader = iter(self.dataloader)
         for step in step_progress:
             # Get the next batch
@@ -456,7 +471,7 @@ class Trainer:
                 is_temp_save = self.curr_step % self.config.save_temp_every == 0
                 is_perm_save = self.curr_step % self.config.save_perm_every == 0
 
-                if is_temp_save or is_perm_save:
+                if is_temp_save or is_perm_save or kill_guard.is_killed:
                     ckpt_name = f"step-{self.curr_step}.ckpt"
                     self.save_checkpoint(name=ckpt_name)
 
@@ -469,6 +484,10 @@ class Trainer:
                 # Add learning rate to results
                 results["lr"] = self.scheduler.get_last_lr()[0]
                 wandb.log(results, step=self.curr_step)
+
+            # Exit training gracefully when killed
+            if kill_guard.is_killed:
+                break
 
     def validate_micro_batch(self, micro_seq_len, micro_train_size):
         """
