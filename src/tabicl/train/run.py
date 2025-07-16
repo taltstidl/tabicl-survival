@@ -27,6 +27,7 @@ from tabicl import TabICL
 from tabicl.model.losses import mean_squared_error_and_rank
 from tabicl.prior.dataset import PriorDataset
 from tabicl.prior.genload import LoadPriorDataset
+from tabicl.train.metrics import concordance_index
 from tabicl.train.optim import get_scheduler
 from tabicl.train.train_config import build_parser
 
@@ -612,8 +613,7 @@ class Trainer:
             if self.config.target_type == "surv":
                 micro_results["npll"] = scaled_loss.item()
                 # We need to evaluate C index individually for each dataset, as it depends on each dataset's risk set
-                c_index = torch.stack([ConcordanceIndex()(-pred[i], true_event[i], true_time[i])
-                                      for i in range(pred.shape[0])]).mean()
+                c_index = concordance_index(pred, true_event, true_time).mean()
                 micro_results["c_index"] = c_index.item() / num_micro_batches
 
         return micro_results
