@@ -99,8 +99,7 @@ class SurvivalEmbedding(nn.Module):
     def __init__(self, embed_dim: int):
         super().__init__()
         self.embed_dim = embed_dim
-        self.event_encoder = nn.Linear(embed_dim, embed_dim)
-        self.dropout_encoder = nn.Linear(embed_dim, embed_dim)
+        self.event_encoder = nn.Linear(2, embed_dim)
 
     def forward(self, src: Tensor) -> Tensor:
         """ Transform event indicators and times to dense embeddings.
@@ -117,10 +116,8 @@ class SurvivalEmbedding(nn.Module):
         """
         src_event, src_time = src[:, :, 0], src[:, :, 1]
         time_embedding = SurvivalEmbedding._time_embedding(src_time, self.embed_dim)
-        embedding = torch.empty(src.shape[0], src.shape[1], self.embed_dim, device=src.device, dtype=src.dtype)
-        embedding[src_event == 1] = self.event_encoder(time_embedding[src_event == 1])
-        embedding[src_event == 0] = self.dropout_encoder(time_embedding[src_event == 0])
-        return embedding
+        event_embedding = self.event_encoder(torch.stack((src_event.float(), 1.0 - src_event.float()), dim=-1))
+        return time_embedding + event_embedding
 
     @staticmethod
     def _time_embedding(x, embed_dim):

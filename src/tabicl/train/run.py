@@ -23,7 +23,7 @@ from tqdm import tqdm
 import wandb
 
 from tabicl import TabICL
-from tabicl.model.losses import mean_squared_error_and_rank
+from tabicl.model.losses import cox_neg_log_likelihood
 from tabicl.prior.dataset import PriorDataset
 from tabicl.prior.genload import LoadPriorDataset
 from tabicl.train.metrics import concordance_index
@@ -621,7 +621,7 @@ class Trainer:
                     # We need to compute NLL individually for each dataset, as it depends on each dataset's risk set
                     # loss = torch.stack([cox.neg_partial_log_likelihood(pred[i], true_event[i], true_time[i])
                     #                     for i in range(pred.shape[0])]).mean()
-                    loss = mean_squared_error_and_rank(pred, true_event, true_time)
+                    loss = cox_neg_log_likelihood(pred, true_event, true_time).mean()
 
         # Scale loss for gradient accumulation and backpropagate
         scaled_loss = loss / num_micro_batches
