@@ -18,8 +18,6 @@ from torch.utils.data import DataLoader
 from torch.multiprocessing import set_start_method
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
-from torchsurv.loss import cox
-from torchsurv.metrics.cindex import ConcordanceIndex
 
 from tqdm import tqdm
 import wandb
@@ -38,14 +36,20 @@ warnings.filterwarnings(
 
 
 class KillGuard:
-    is_killed = False
-
     def __init__(self):
         signal.signal(signal.SIGINT, self.exit_gracefully)
         signal.signal(signal.SIGTERM, self.exit_gracefully)
+        self.sig_received = False
+        self.start_time = timeit.default_timer()
+        self.max_time = 24 * 60 * 60 - 5 * 60  # 23h 55m
 
     def exit_gracefully(self, signum, frame):
-        self.is_killed = True
+        self.sig_received = True
+
+    @property
+    def is_killed(self):
+        current_time = timeit.default_timer()
+        return self.sig_received | ((current_time - self.start_time) > self.max_time)
 
 
 class Timer:
@@ -632,7 +636,7 @@ class Trainer:
             if self.config.target_type == "surv":
                 micro_results["npll"] = scaled_loss.item()
                 # We need to evaluate C index individually for each dataset, as it depends on each dataset's risk set
-                c_index = concordance_index(pred, true_event, true_time).mean()
+                c_index = concordance_index(pred, true_event, true_time).nanmean()
                 micro_results["c_index"] = c_index.item() / num_micro_batches
 
         return micro_results
