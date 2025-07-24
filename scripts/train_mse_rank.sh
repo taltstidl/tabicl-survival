@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:a40:2
+#SBATCH --gres=gpu:a40:1
 #SBATCH --time=24:00:00
 
 # for web access
@@ -13,7 +13,8 @@ module load python/3.12-conda
 source $WORK/venvs/tabicl-survival/bin/activate
 
 # from sample scripts
-torchrun --standalone --nproc_per_node=2 src/tabicl/train/run.py \
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+torchrun --standalone --nproc_per_node=1 src/tabicl/train/run.py \
             --wandb_log True \
             --wandb_project TabICL \
             --wandb_name Stage1 \
@@ -23,7 +24,7 @@ torchrun --standalone --nproc_per_node=2 src/tabicl/train/run.py \
             --dtype float32 \
             --np_seed 42 \
             --torch_seed 42 \
-            --max_steps 1000 \
+            --max_steps 10000 \
             --batch_size 512 \
             --micro_batch_size 4 \
             --lr 1e-4 \
@@ -31,6 +32,7 @@ torchrun --standalone --nproc_per_node=2 src/tabicl/train/run.py \
             --warmup_proportion 0.02 \
             --gradient_clipping 1.0 \
             --target_type surv \
+            --loss_func mse_rank \
             --prior_type mix_scm \
             --prior_device cpu \
             --batch_size_per_gp 4 \
@@ -52,6 +54,6 @@ torchrun --standalone --nproc_per_node=2 src/tabicl/train/run.py \
             --icl_nhead 4 \
             --ff_factor 2 \
             --norm_first True \
-            --checkpoint_dir stage1-surv \
+            --checkpoint_dir stage1-surv-mse-rank \
             --save_temp_every 50 \
             --save_perm_every 5000
