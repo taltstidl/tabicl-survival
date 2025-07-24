@@ -23,7 +23,7 @@ from tqdm import tqdm
 import wandb
 
 from tabicl import TabICL
-from tabicl.model.losses import cox_neg_log_likelihood
+from tabicl.model.losses import cox_neg_log_likelihood, mse_with_pairwise_rank
 from tabicl.prior.dataset import PriorDataset
 from tabicl.prior.genload import LoadPriorDataset
 from tabicl.train.metrics import concordance_index
@@ -614,14 +614,15 @@ class Trainer:
                 true = y_test.long().flatten()
                 loss = F.cross_entropy(pred, true)
             if self.config.target_type == "surv":
-                pred = pred.squeeze(-1)
-                true_event, true_time = y_test[:, :, 0].bool(), y_test[:, :, 1].float()
-                # torchsurv produces warnings in case of ties, ignore them here as they are handled using Efron's method
-                with warnings.catch_warnings(action="ignore"):
-                    # We need to compute NLL individually for each dataset, as it depends on each dataset's risk set
-                    # loss = torch.stack([cox.neg_partial_log_likelihood(pred[i], true_event[i], true_time[i])
-                    #                     for i in range(pred.shape[0])]).mean()
+                if self.config.loss_func == "cox":
+                    pred = pred.squeeze(-1)
+                    true_event, true_time = y_test[:, :, 0].bool(), y_test[:, :, 1].float()
                     loss = cox_neg_log_likelihood(pred, true_event, true_time).mean()
+                if self.config.loss_func == "mse_rank":
+                    pred = pred.squeeze(-1)
+                    true_event, true_time = y_test[:, :, 0].bool(), y_test[:, :, 1].float()
+                    loss = mse_with_pairwise_rank(pred, true_event, true_time).mean()
+                    pred = -pred  # such that concordance index can be calculated correctly
 
         # Scale loss for gradient accumulation and backpropagate
         scaled_loss = loss / num_micro_batches
