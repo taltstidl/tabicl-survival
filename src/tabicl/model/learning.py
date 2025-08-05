@@ -50,6 +50,9 @@ class ICLearning(nn.Module):
 
     target_type: str, default="class"
         Type of target to choose correct y encoder: 'class' (default), or 'surv'
+
+    embed_type: str, default="sin"
+        Type of embedding: sin (sinusoidal, default), or 'ple' (piecewise linear)
     """
 
     def __init__(
@@ -63,6 +66,7 @@ class ICLearning(nn.Module):
         activation: str | callable = "gelu",
         norm_first: bool = True,
         target_type: str = "class",
+        embed_type: str = "sin",
     ):
         super().__init__()
         self.max_classes = max_classes
@@ -84,7 +88,7 @@ class ICLearning(nn.Module):
         if target_type == "class":
             self.y_encoder = OneHotAndLinear(max_classes, d_model)
         if target_type == "surv":
-            self.y_encoder = SurvivalEmbedding(d_model)
+            self.y_encoder = SurvivalEmbedding(d_model, embed_type)
         if self.y_encoder is None:
             raise ValueError("Could not find suitable encoder for target type " + target_type)
         self.decoder = nn.Sequential(nn.Linear(d_model, d_model * 2), nn.GELU(), nn.Linear(d_model * 2, max_classes))

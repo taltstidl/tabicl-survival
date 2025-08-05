@@ -206,6 +206,7 @@ class Trainer:
             "activation": self.config.activation,
             "norm_first": self.config.norm_first,
             "target_type": self.config.target_type,
+            "embed_type": self.config.embed_type,
         }
 
         model = TabICL(**self.model_config)
