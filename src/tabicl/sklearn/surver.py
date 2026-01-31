@@ -1,44 +1,80 @@
-from typing import Optional, Dict, List
+from pathlib import Path
+from typing import Optional, Dict
 
 import numpy as np
 import torch
+from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import LocalEntryNotFoundError
 from sklearn.base import BaseEstimator
 from sklearn.utils.validation import check_is_fitted, validate_data
 from sksurv.base import SurvivalAnalysisMixin
 from sksurv.util import check_array_survival
 
 from tabicl import TabICL, InferenceConfig
-from tabicl.sklearn.preprocessing import TransformToNumerical, EnsembleGenerator
+from tabicl.sklearn.preprocessing import TransformToNumerical
 
 
 class TabICLSurver(SurvivalAnalysisMixin, BaseEstimator):
     def __init__(
             self,
-            n_estimators: int = 32,
-            norm_methods: Optional[str | List[str]] = None,
-            feat_shuffle_method: str = "latin",
-            outlier_threshold: float = 4.0,
             use_amp: bool = True,
-            batch_size: Optional[int] = 8,
+            model_path: Optional[str | Path] = None,
+            allow_auto_download: bool = True,
+            checkpoint_version: str = "tabicl-survival-v1.ckpt",
             device: Optional[str | torch.device] = None,
-            random_state: int | None = 42,
             verbose: bool = False,
             inference_config: Optional[InferenceConfig | Dict] = None,
     ):
-        self.n_estimators = n_estimators
-        self.norm_methods = norm_methods
-        self.feat_shuffle_method = feat_shuffle_method
-        self.outlier_threshold = outlier_threshold
         self.use_amp = use_amp
-        self.batch_size = batch_size
+        self.model_path = model_path
+        self.allow_auto_download = allow_auto_download
+        self.checkpoint_version = checkpoint_version
         self.device = device
-        self.random_state = random_state
         self.verbose = verbose
         self.inference_config = inference_config
 
     def _load_model(self):
-        model_path = '../sklearn/step-10000.ckpt'
-        checkpoint = torch.load(model_path, map_location='cpu', weights_only=True)
+        repo_id = 'taltstidl/tabicl-survival'
+        filename = self.checkpoint_version
+
+        if self.model_path is None:
+            # Scenario 1: the model path is not provided, so download from HF Hub based on the checkpoint version
+            try:
+                model_path_ = Path(hf_hub_download(repo_id=repo_id, filename=filename, local_files_only=True))
+            except LocalEntryNotFoundError:
+                if self.allow_auto_download:
+                    print(f"Checkpoint '{filename}' not cached.\n Downloading from Hugging Face Hub ({repo_id}).\n")
+                    model_path_ = Path(hf_hub_download(repo_id=repo_id, filename=filename))
+                else:
+                    raise ValueError(
+                        f"Checkpoint '{filename}' not cached and automatic download is disabled.\n"
+                        f"Set allow_auto_download=True to download the checkpoint from Hugging Face Hub ({repo_id})."
+                    )
+            if model_path_:
+                checkpoint = torch.load(model_path_, map_location="cpu", weights_only=True)
+        else:
+            # Scenario 2: the model path is provided
+            model_path_ = Path(self.model_path) if isinstance(self.model_path, str) else self.model_path
+            if model_path_.exists():
+                # Scenario 2a: the model path exists, load it directly
+                checkpoint = torch.load(model_path_, map_location="cpu", weights_only=True)
+            else:
+                # Scenario 2b: the model path does not exist, download the checkpoint version to this path
+                if self.allow_auto_download:
+                    print(
+                        f"Checkpoint not found at '{model_path_}'.\n"
+                        f"Downloading '{filename}' from Hugging Face Hub ({repo_id}) to this location.\n"
+                    )
+                    model_path_.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path = hf_hub_download(repo_id=repo_id, filename=filename, local_dir=model_path_.parent)
+                    Path(cache_path).rename(model_path_)
+                    checkpoint = torch.load(model_path_, map_location="cpu", weights_only=True)
+                else:
+                    raise ValueError(
+                        f"Checkpoint not found at '{model_path_}' and automatic download is disabled.\n"
+                        f"Either provide a valid checkpoint path, or set allow_auto_download=True to download "
+                        f"'{filename}' from Hugging Face Hub ({repo_id})."
+                    )
 
         assert 'config' in checkpoint, 'The checkpoint doesn\'t contain the model configuration.'
         assert 'state_dict' in checkpoint, 'The checkpoint doesn\'t contain the model state.'
@@ -85,67 +121,20 @@ class TabICLSurver(SurvivalAnalysisMixin, BaseEstimator):
 
         # Transform input features
         self.X_encoder_ = TransformToNumerical(verbose=self.verbose)
-        X = self.X_encoder_.fit_transform(X)
-
-        # Fit ensemble generator to create multiple dataset views
-        self.ensemble_generator_ = EnsembleGenerator(
-            n_estimators=self.n_estimators,
-            norm_methods=self.norm_methods or ["none", "power"],
-            feat_shuffle_method=self.feat_shuffle_method,
-            outlier_threshold=self.outlier_threshold,
-            random_state=self.random_state,
-            target_type="surv",
-        )
-        self.ensemble_generator_.fit(X, y)
+        self.X_ = self.X_encoder_.fit_transform(X)
+        time = (time - time.min()) / (time.max() - time.min())
+        self.y_ = np.stack([event, time], axis=-1)
 
         return self
-
-    def _batch_forward(self, Xs, ys, shuffle_patterns=None):
-        batch_size = self.batch_size or Xs.shape[0]
-        n_batches = np.ceil(Xs.shape[0] / batch_size)
-        Xs = np.array_split(Xs, n_batches)
-        ys = np.array_split(ys, n_batches)
-        if shuffle_patterns is None:
-            shuffle_patterns = [None] * n_batches
-        else:
-            shuffle_patterns = np.array_split(shuffle_patterns, n_batches)
-
-        outputs = []
-        for X_batch, y_batch, pattern_batch in zip(Xs, ys, shuffle_patterns):
-            X_batch = torch.from_numpy(X_batch).float().to(self.device_)
-            y_batch = torch.from_numpy(y_batch).float().to(self.device_)
-            if pattern_batch is not None:
-                pattern_batch = pattern_batch.tolist()
-
-            with torch.no_grad():
-                out = self.model_(
-                    X_batch,
-                    y_batch,
-                    feature_shuffles=pattern_batch,
-                    return_logits=True,
-                    inference_config=self.inference_config_,
-                )
-            outputs.append(out.float().cpu().numpy())
-
-        return np.concatenate(outputs, axis=0)
 
     def predict(self, X):
         check_is_fitted(self)
 
         X = self.X_encoder_.transform(X)
 
-        data = self.ensemble_generator_.transform(X)
-        outputs = []
-        for norm_method, (Xs, ys) in data.items():
-            shuffle_patterns = self.ensemble_generator_.feature_shuffle_patterns_[norm_method]
-            outputs.append(self._batch_forward(Xs, ys, shuffle_patterns))
-        outputs = np.concatenate(outputs, axis=0)
+        X = torch.from_numpy(np.concatenate([self.X_, X], axis=0)).float().to(self.device_)
+        y = torch.from_numpy(self.y_).float().to(self.device_)
 
-        # Calculate mean predictions over all ensemble members
-        outputs = np.mean(outputs, axis=0)
-
-        # Opportunistically compute single risk or survival time
-        if outputs.shape[1] == 1:
-            outputs = outputs[:, 0]
-
-        return outputs
+        with torch.no_grad():
+            outputs = self.model_(X.unsqueeze(0), y.unsqueeze(0), inference_config=self.inference_config_)
+            return outputs.squeeze(0).squeeze(-1).cpu().numpy()

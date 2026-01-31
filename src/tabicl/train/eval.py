@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OrdinalEncoder
 from sksurv.metrics import concordance_index_censored as concordance
 
 from tabicl.sklearn.surver import TabICLSurver
@@ -100,7 +101,8 @@ def main():
     # --- (2) ENCODER/MODEL/LOADER --- #
 
     # (i) Set up feature transformer pipeline
-    enc_fac = Pipeline(steps=[('ohe', OneHotEncoder(drop=None, sparse_output=False, handle_unknown='ignore'))])
+    # enc_fac = Pipeline(steps=[('ohe', OneHotEncoder(drop=None, sparse_output=False, handle_unknown='ignore'))])
+    enc_fac = Pipeline(steps=[('ohe', OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1, encoded_missing_value=-1))])
     sel_fac = make_column_selector(pattern='^fac\\_')
     enc_num = Pipeline(steps=[('impute', SimpleImputer(strategy='median')),
                               ('scale', StandardScaler())])
@@ -133,10 +135,12 @@ def main():
         # Fit encoder
         enc_df.fit(df_train)
         # Transform data
-        X_train = df_train  # enc_df.transform(df_train)
+        # X_train = df_train.drop(columns=['pid', 'event', 'time'])
+        X_train = enc_df.transform(df_train)
         # assert X_train.columns.str.split('\\_{1,2}', expand=True).to_frame(False)[1].isin(
         #     ['fac', 'num']).all(), 'Expected feature names to be prefixed with "fac_" or "num_"'
-        X_test = df_test  # enc_df.transform(df_test)
+        # X_test = df_test.drop(columns=['pid', 'event', 'time'])
+        X_test = enc_df.transform(df_test)
         if df.shape[0] > 1024 or X_train.shape[1] > 200 or X_test.shape[1] > 200:
             continue  # For now, TabICL only supports up to 1024 rows and 200 features
         # Set up the survival object and fit the model
