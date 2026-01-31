@@ -16,10 +16,6 @@ def cox_neg_log_likelihood(risk: torch.Tensor, event: torch.Tensor, time: torch.
     return - likelihood.sum(dim=-1) / event.sum(dim=-1)
 
 
-def weibull_neg_log_likelihood(params: torch.Tensor, event: torch.Tensor, time: torch.Tensor) -> torch.Tensor:
-    pass
-
-
 def mse_with_pairwise_rank(estimate: torch.Tensor, event: torch.Tensor, time: torch.Tensor) -> torch.Tensor:
     """ Extended mean squared error and pairwise ranking loss.
     From RankDeepSurv: https://doi.org/10.1016/j.artmed.2019.06.001
@@ -40,6 +36,6 @@ def mse_with_pairwise_rank(estimate: torch.Tensor, event: torch.Tensor, time: to
     # (time_j - time_i) - (estimate_j - estimate_i) = (time_j - estimate_j) - (time_i - estimate_i)
     error_i, error_j = error.unsqueeze(-2), error.unsqueeze(-1)
     diff = torch.clamp(error_j - error_i, min=0)  # matrix D in report, fused with condition
-    loss2 = torch.sum(diff * comp, dim=(-2, -1)) / estimate.shape[-1]
+    loss2 = torch.sum(diff * comp, dim=(-2, -1)) / event.shape[-1]
 
     return loss1 + loss2
