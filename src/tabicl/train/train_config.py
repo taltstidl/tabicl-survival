@@ -151,6 +151,9 @@ def build_parser():
         "--prior_type", default="mix_scm", type=str, help="Prior type: dummy, mlp_scm, tree_scm, mix_scm"
     )
     parser.add_argument("--prior_device", default="cpu", type=str, help="Device for prior data generation")
+    parser.add_argument("--target_type", default="class", type=str, help="Target type: class, surv")
+    parser.add_argument("--embed_type", default="sin", type=str, help="Embedding type: sin, ple")
+    parser.add_argument("--loss_func", default="cox", type=str, help="Loss function: cox, weibull, mse_rank, bce_rank")
 
     ###########################################################################
     ##### Model Architecture Config ###########################################

@@ -5,7 +5,7 @@ import math
 import torch
 from torch import nn, Tensor
 
-from .layers import ClassNode, OneHotAndLinear
+from .layers import ClassNode, OneHotAndLinear, SurvivalEmbedding
 from .encoders import Encoder
 from .inference import InferenceManager
 from .inference_config import MgrConfig
@@ -47,6 +47,12 @@ class ICLearning(nn.Module):
 
     norm_first : bool, default=True
         If True, uses pre-norm architecture (LayerNorm before attention and feedforward)
+
+    target_type: str, default="class"
+        Type of target to choose correct y encoder: 'class' (default), or 'surv'
+
+    embed_type: str, default="sin"
+        Type of embedding: sin (sinusoidal, default), or 'ple' (piecewise linear)
     """
 
     def __init__(
@@ -59,6 +65,8 @@ class ICLearning(nn.Module):
         dropout: float = 0.0,
         activation: str | callable = "gelu",
         norm_first: bool = True,
+        target_type: str = "class",
+        embed_type: str = "sin",
     ):
         super().__init__()
         self.max_classes = max_classes
@@ -76,9 +84,16 @@ class ICLearning(nn.Module):
         if self.norm_first:
             self.ln = nn.LayerNorm(d_model)
 
-        self.y_encoder = OneHotAndLinear(max_classes, d_model)
+        self.y_encoder = None
+        if target_type == "class":
+            self.y_encoder = OneHotAndLinear(max_classes, d_model)
+        if target_type == "surv":
+            self.y_encoder = SurvivalEmbedding(d_model, embed_type)
+        if self.y_encoder is None:
+            raise ValueError("Could not find suitable encoder for target type " + target_type)
         self.decoder = nn.Sequential(nn.Linear(d_model, d_model * 2), nn.GELU(), nn.Linear(d_model * 2, max_classes))
 
+        self.target_type = target_type
         self.inference_mgr = InferenceManager(enc_name="tf_icl", out_dim=max_classes)
 
     def _grouping(self, num_classes: int) -> tuple[Tensor, int]:
@@ -259,14 +274,17 @@ class ICLearning(nn.Module):
         """
 
         train_size = y_train.shape[1]
-        num_classes = len(torch.unique(y_train[0]))
         out = self.inference_mgr(
             self._icl_predictions, inputs=OrderedDict([("R", R), ("y_train", y_train)]), auto_batch=auto_batch
         )
-        out = out[:, train_size:, :num_classes]
+        if self.target_type == "class":
+            num_classes = len(torch.unique(y_train[0]))
+            out = out[:, train_size:, :num_classes]
 
-        if not return_logits:
-            out = torch.softmax(out / softmax_temperature, dim=-1)
+            if not return_logits:
+                out = torch.softmax(out / softmax_temperature, dim=-1)
+        if self.target_type == "surv":
+            out = out[:, train_size:]
 
         return out
 
@@ -392,32 +410,41 @@ class ICLearning(nn.Module):
             )
         self.inference_mgr.configure(**mgr_config)
 
-        num_classes = len(torch.unique(y_train[0]))
-        assert all(
-            len(torch.unique(yi)) == num_classes for yi in y_train
-        ), "All tables must have the same number of classes"
+        out = None
+        if self.target_type == "class":
+            num_classes = len(torch.unique(y_train[0]))
+            assert all(
+                len(torch.unique(yi)) == num_classes for yi in y_train
+            ), "All tables must have the same number of classes"
 
-        if num_classes <= self.max_classes:
-            # Standard classification
+            if num_classes <= self.max_classes:
+                # Standard classification
+                out = self._predict_standard(
+                    R, y_train, return_logits=return_logits, softmax_temperature=softmax_temperature
+                )
+            else:
+                # Hierarchical classification
+                out = []
+                train_size = y_train.shape[1]
+                for ri, yi in zip(R, y_train):
+                    if mgr_config.offload:
+                        ri, yi = ri.cpu(), yi.cpu()
+                    else:
+                        ri, yi = ri.to(mgr_config.device), yi.to(mgr_config.device)
+                    self._fit_hierarchical(ri[:train_size], yi)
+                    probs = self._predict_hierarchical(ri[train_size:])
+                    out.append(probs)
+                out = torch.stack(out, dim=0)
+                if return_logits:
+                    out = softmax_temperature * torch.log(out + 1e-6)
+        if self.target_type == "surv":
+            # Standard survival analysis
             out = self._predict_standard(
                 R, y_train, return_logits=return_logits, softmax_temperature=softmax_temperature
             )
-        else:
-            # Hierarchical classification
-            out = []
-            train_size = y_train.shape[1]
-            for ri, yi in zip(R, y_train):
-                if mgr_config.offload:
-                    ri, yi = ri.cpu(), yi.cpu()
-                else:
-                    ri, yi = ri.to(mgr_config.device), yi.to(mgr_config.device)
-                self._fit_hierarchical(ri[:train_size], yi)
-                probs = self._predict_hierarchical(ri[train_size:])
-                out.append(probs)
-            out = torch.stack(out, dim=0)
-            if return_logits:
-                out = softmax_temperature * torch.log(out + 1e-6)
 
+        if out is None:
+            raise ValueError('TabICL\'s ICLearning module has unknown target type ' + str(self.target_type))
         return out
 
     def forward(

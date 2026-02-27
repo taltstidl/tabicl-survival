@@ -36,6 +36,7 @@ from .tree_scm import TreeSCM
 
 from .hp_sampling import HpSamplerList
 from .reg2cls import Reg2Cls
+from .reg2surv import Reg2Surv
 from .prior_config import DEFAULT_FIXED_HP, DEFAULT_SAMPLED_HP
 
 
@@ -451,6 +452,9 @@ class SCMPrior(Prior):
         Type of prior: 'mlp_scm' (default), 'tree_scm', or 'mix_scm'
         'mix_scm' randomly selects between 'mlp_scm' and 'tree_scm' based on probabilities.
 
+    target_type : str, default="class"
+        Type of target: 'class' (default), or 'surv'
+
     fixed_hp : dict, default=DEFAULT_FIXED_HP
         Fixed structural configuration parameters
 
@@ -483,6 +487,7 @@ class SCMPrior(Prior):
         max_train_size: Union[int, float] = 0.9,
         replay_small: bool = False,
         prior_type: str = "mlp_scm",
+        target_type: str = "class",
         fixed_hp: Dict[str, Any] = DEFAULT_FIXED_HP,
         sampled_hp: Dict[str, Any] = DEFAULT_SAMPLED_HP,
         n_jobs: int = -1,
@@ -506,6 +511,7 @@ class SCMPrior(Prior):
         self.batch_size_per_subgp = batch_size_per_subgp or batch_size_per_gp
         self.seq_len_per_gp = seq_len_per_gp
         self.prior_type = prior_type
+        self.target_type = target_type
         self.fixed_hp = fixed_hp
         self.sampled_hp = sampled_hp
         self.n_jobs = n_jobs
@@ -553,7 +559,10 @@ class SCMPrior(Prior):
 
         while True:
             X, y = prior_cls(**params)()
-            X, y = Reg2Cls(params)(X, y)
+            if self.target_type == "class":
+                X, y = Reg2Cls(params)(X, y)
+            if self.target_type == "surv":
+                X, y = Reg2Surv(params)(X, y)
 
             # Add batch dim for single dataset to be compatible with delete_unique_features and sanity_check
             X, y = X.unsqueeze(0), y.unsqueeze(0)
@@ -561,7 +570,7 @@ class SCMPrior(Prior):
 
             # Only keep valid datasets with sufficient features and balanced classes
             X, d = self.delete_unique_features(X, d)
-            if (d > 0).all() and self.sanity_check(X, y, params["train_size"]):
+            if (d > 0).all() and (self.target_type != "class" or self.sanity_check(X, y, params["train_size"])):
                 return X.squeeze(0), y.squeeze(0), d.squeeze(0)
 
     @torch.no_grad()
@@ -660,6 +669,7 @@ class SCMPrior(Prior):
                     # Create parameters dictionary for this dataset
                     params = {
                         **self.fixed_hp,  # Fixed HPs
+                        "num_outputs": 2 if self.target_type == "surv" else 1,
                         "seq_len": gp_seq_len,
                         "train_size": gp_train_size,
                         # If per-gp setting, use adjusted max features for this group because we use nested tensors
@@ -899,6 +909,9 @@ class PriorDataset(IterableDataset):
 
         2. Dummy: Randomly generated datasets for debugging
 
+    target_type : str, default="class"
+        Type of target: 'class' (default), or 'surv'
+
     scm_fixed_hp : dict, default=DEFAULT_FIXED_HP
         Fixed parameters for SCM-based priors
 
@@ -931,6 +944,7 @@ class PriorDataset(IterableDataset):
         max_train_size: Union[int, float] = 0.9,
         replay_small: bool = False,
         prior_type: str = "mlp_scm",
+        target_type: str = "class",
         scm_fixed_hp: Dict[str, Any] = DEFAULT_FIXED_HP,
         scm_sampled_hp: Dict[str, Any] = DEFAULT_SAMPLED_HP,
         n_jobs: int = -1,
@@ -967,6 +981,7 @@ class PriorDataset(IterableDataset):
                 max_train_size=max_train_size,
                 replay_small=replay_small,
                 prior_type=prior_type,
+                target_type=target_type,
                 fixed_hp=scm_fixed_hp,
                 sampled_hp=scm_sampled_hp,
                 n_jobs=n_jobs,
@@ -992,6 +1007,7 @@ class PriorDataset(IterableDataset):
         self.max_train_size = max_train_size
         self.device = device
         self.prior_type = prior_type
+        self.target_type = target_type
 
     def get_batch(self, batch_size: Optional[int] = None) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """
@@ -1064,6 +1080,7 @@ class PriorDataset(IterableDataset):
         return (
             f"PriorDataset(\n"
             f"  prior_type: {self.prior_type}\n"
+            f"  target_type: {self.target_type}\n"
             f"  batch_size: {self.batch_size}\n"
             f"  batch_size_per_gp: {self.batch_size_per_gp}\n"
             f"  features: {self.min_features} - {self.max_features}\n"

@@ -1,17 +1,18 @@
 [project]
-name = "tabicl"
+name = "tabicl-survival"
 dynamic = ["version"]
-description = "TabICL: A Tabular Foundation Model for In-Context Learning on Large Data"
+description = "TabICL-Survival: A Tabular Foundation Model for Survival In-Context Learning"
 readme = "README.md"
 authors = [
     { name = "Jingang Qu" },
-    { name = "David Holzmüller" } ,
-    { name = "Marine Le Morvan" } ,
-    { name = "Gaël Varoquaux" } ,
+    { name = "David Holzmüller" },
+    { name = "Marine Le Morvan" },
+    { name = "Gaël Varoquaux" },
+    { name = "Thomas Altstidl" },
 ]
 license = { file = "LICENSE" }
 requires-python = ">=3.9,<3.13"
-keywords = ["tabular data", "foundation model", "TabICL", "in-context learning"]
+keywords = ["tabular data", "survival analysis", "foundation model", "TabICL", "in-context learning"]
 classifiers = [
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
@@ -27,6 +28,7 @@ classifiers = [
 dependencies = [
     "torch>=2.2,<3",  # to enjoy Flash Attention v2
     "scikit-learn>=1.3.0,<1.7",
+    "scikit-survival",
     "numpy",
     "scipy",
     "joblib",
@@ -47,12 +49,12 @@ build-backend = "hatchling.build"
 path = "src/tabicl/__about__.py"
 
 [project.urls]
-Documentation = "https://github.com/soda-inria/tabicl#readme"
-Issues = "https://github.com/soda-inria/tabicl/issues"
-Source = "https://github.com/soda-inria/tabicl"
+Documentation = "https://github.com/taltstidl/tabicl-survival#readme"
+Issues = "https://github.com/taltstidl/tabicl-survival/issues"
+Source = "https://github.com/taltstidl/tabicl-survival"
 
 [tool.hatch.build.targets.sdist]
-only-include = ["src/tabicl", "figures", "LICENSE", "README.md"]
+only-include = ["src/tabicl", "LICENSE", "README.md"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tabicl"]

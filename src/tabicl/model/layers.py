@@ -86,6 +86,71 @@ class OneHotAndLinear(nn.Linear):
         return F.linear(one_hot, self.weight, self.bias)
 
 
+class SurvivalEmbedding(nn.Module):
+    """Uses sinusoidal encoding to encode the time-to-event, followed by a learnable embedding
+    dependent on whether event was observed or not.
+
+    Parameters
+    ----------
+    embed_dim : int
+        Output embedding dimension
+
+    embed_type: str, default="sin"
+        Type of embedding: sin (sinusoidal, default), or 'ple' (piecewise linear)
+    """
+
+    def __init__(self, embed_dim: int, embed_type: str = "sin"):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.embed_type = embed_type
+        if self.embed_type == "sin":
+            self.event_encoder = nn.Linear(2, embed_dim)
+        if self.embed_type == "ple":
+            self.observed_encoder = nn.Linear(embed_dim, embed_dim)
+            self.dropout_encoder = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, src: Tensor) -> Tensor:
+        """ Transform event indicators and times to dense embeddings.
+
+        Parameters
+        ----------
+        src: Tensor
+            Float tensor of shape (batch_size, sequence_length, 2) containing event indicators and times
+
+        Returns
+        -------
+        Tensor
+            Embedded representation of shape (batch_size, sequence_length, embed_dim)
+        """
+        src_event, src_time = src[:, :, 0], src[:, :, 1]
+        if self.embed_type == "sin":
+            time_embedding = SurvivalEmbedding._time_embedding(src_time, self.embed_dim)
+            event_embedding = self.event_encoder(torch.stack((src_event.float(), 1.0 - src_event.float()), dim=-1))
+            return time_embedding + event_embedding
+        if self.embed_type == "ple":
+            encoding = SurvivalEmbedding._piecewise_linear_encoding(src_time, self.embed_dim)
+            observed_encoding = src_event.unsqueeze(-1) * self.observed_encoder(encoding)
+            dropout_encoding = (1.0 - src_event).unsqueeze(-1) * self.dropout_encoder(encoding)
+            return F.relu(observed_encoding + dropout_encoding)
+        raise ValueError('Unknown survival embedding type ' + self.embed_type)
+
+    @staticmethod
+    def _time_embedding(x, embed_dim):
+        x = x.unsqueeze(-1)
+        assert embed_dim % 2 == 0, "Embedding dimension must be divisible by 2, got " + embed_dim
+        i = torch.arange(embed_dim // 2, device=x.device).float()
+        n = torch.tensor(10000)
+        div_term = torch.exp((2 * i / embed_dim) * torch.log(n))
+        # Scale by 500 to yield useful embeddings
+        embedding = torch.concat([torch.sin(500 * x / div_term), torch.cos(500* x / div_term)], dim=-1)
+        return embedding
+
+    @staticmethod
+    def _piecewise_linear_encoding(x, embed_dim):
+        encoding = x.unsqueeze(-1) * embed_dim - torch.arange(embed_dim, device=x.device)
+        return encoding.clip(0, 1)
+
+
 class SkippableLinear(nn.Linear):
     """Linear layer that handles inputs where all values equal `skip_value`.
 

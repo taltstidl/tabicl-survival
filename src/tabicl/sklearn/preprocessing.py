@@ -8,6 +8,7 @@ from copy import deepcopy
 from typing import List, Optional
 
 import numpy as np
+from numpy.lib.recfunctions import structured_to_unstructured
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.impute import SimpleImputer
@@ -843,6 +844,9 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
     random_state : int or None, default=None
         Seed for reproducible ensemble generation.
 
+    target_type: str, default="class"
+        Type of target to generate correct target transforms: 'class' (default), or 'surv'
+
     Attributes
     ----------
     n_features_in_ : int
@@ -864,8 +868,8 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
     feature_shuffle_patterns_ : OrderedDict
         Maps normalization methods to lists of feature index permutations.
 
-    class_shift_offsets_ : OrderedDict
-        Maps normalization methods to lists of class shift offsets.
+    target_transforms_ : OrderedDict
+        Maps normalization methods to lists of target transformations (class shifts or time scaling).
 
     X_ : ndarray
         Training feature data after filtering.
@@ -880,15 +884,19 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
         norm_methods: str | List[str] | None = None,
         feat_shuffle_method: str = "latin",
         class_shift: bool = True,
+        time_scale: bool = True,
         outlier_threshold: float = 4.0,
         random_state: Optional[int] = None,
+        target_type: str = "class",
     ):
         self.n_estimators = n_estimators
         self.norm_methods = norm_methods
         self.feat_shuffle_method = feat_shuffle_method
         self.class_shift = class_shift
+        self.time_scale = time_scale
         self.outlier_threshold = outlier_threshold
         self.random_state = random_state
+        self.target_type = target_type
 
     def fit(self, X, y):
         """Create ensemble configurations and fit preprocessing pipelines.
@@ -933,7 +941,7 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
         self.n_classes_ = len(np.unique(y))
 
         self.rng_ = random.Random(self.random_state)
-        self.ensemble_configs_, self.feature_shuffle_patterns_, self.class_shift_offsets_ = self._generate_ensemble()
+        self.ensemble_configs_, self.feature_shuffle_patterns_, self.target_transforms_ = self._generate_ensemble()
 
         self.preprocessors_ = {}
         for norm_method in self.ensemble_configs_:
@@ -965,31 +973,39 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
         )
         shuffle_patterns = shuffler.shuffle(self.n_estimators)
 
-        if self.class_shift and self.n_estimators > 1:
-            shift_offsets = self.rng_.sample(range(self.n_classes_), self.n_classes_)
-        else:
-            shift_offsets = [0]
+        transforms = None
+        if self.target_type == "class":
+            if self.class_shift and self.n_estimators > 1:
+                transforms = self.rng_.sample(range(self.n_classes_), self.n_classes_)
+            else:
+                transforms = [0]
+        if self.target_type == "surv":
+            if self.time_scale and self.n_estimators > 1:
+                transforms = [0.9 + i * 0.01 for i in range(11)]  # 0.90, 0.91, ..., 1.00
+                self.rng_.shuffle(transforms)
+            else:
+                transforms = [1.0]
 
-        shuffle_shift_configs = list(itertools.product(shuffle_patterns, shift_offsets))
-        self.rng_.shuffle(shuffle_shift_configs)
+        shuffle_trans_configs = list(itertools.product(shuffle_patterns, transforms))
+        self.rng_.shuffle(shuffle_trans_configs)
 
-        shuffle_shift_norm_configs = list(itertools.product(shuffle_shift_configs, self.norm_methods_))
-        shuffle_shift_norm_configs = shuffle_shift_norm_configs[: self.n_estimators]
+        shuffle_trans_norm_configs = list(itertools.product(shuffle_trans_configs, self.norm_methods_))
+        shuffle_trans_norm_configs = shuffle_trans_norm_configs[: self.n_estimators]
 
         # Reorganize configs so that those with the same normalization method are grouped together
-        used_methods = list(set([config[1] for config in shuffle_shift_norm_configs]))
+        used_methods = list(set([config[1] for config in shuffle_trans_norm_configs]))
 
         ensemble_configs = OrderedDict()
         shuffle_patterns = OrderedDict()
-        shift_offsets = OrderedDict()
+        target_transforms = OrderedDict()
 
         for method in used_methods:
-            shuffle_shift_configs = [config[0] for config in shuffle_shift_norm_configs if config[1] == method]
-            shuffle_patterns[method] = [config[0] for config in shuffle_shift_configs]
-            shift_offsets[method] = [config[1] for config in shuffle_shift_configs]
-            ensemble_configs[method] = shuffle_shift_configs
+            shuffle_trans_configs = [config[0] for config in shuffle_trans_norm_configs if config[1] == method]
+            shuffle_patterns[method] = [config[0] for config in shuffle_trans_configs]
+            target_transforms[method] = [config[1] for config in shuffle_trans_configs]
+            ensemble_configs[method] = shuffle_trans_configs
 
-        return ensemble_configs, shuffle_patterns, shift_offsets
+        return ensemble_configs, shuffle_patterns, target_transforms
 
     def transform(self, X):
         """Combines training and test data to create different in-context learning prompts.
@@ -1018,9 +1034,11 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
         # Unique feature filtering
         X = self.unique_filter_.transform(X)
         y = self.y_
+        if self.target_type == "surv":
+            y = structured_to_unstructured(y).astype(np.float32)
 
         data = OrderedDict()
-        for norm_method, shuffle_shift_configs in self.ensemble_configs_.items():
+        for norm_method, shuffle_trans_configs in self.ensemble_configs_.items():
             # Apply preprocessing
             preprocessor = self.preprocessors_[norm_method]
             X_variant = np.concatenate(
@@ -1030,9 +1048,14 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
             # Shuffle features and shift class labels
             X_ensemble = []
             y_ensemble = []
-            for shuffle_pattern, shift_offset in shuffle_shift_configs:
+            for shuffle_pattern, target_transform in shuffle_trans_configs:
                 X_ensemble.append(X_variant[:, shuffle_pattern])
-                y_ensemble.append((y + shift_offset) % self.n_classes_)
+                if self.target_type == "class":
+                    y_ensemble.append((y + target_transform) % self.n_classes_)
+                if self.target_type == "surv":
+                    y = np.copy(y)
+                    y[:, 1] = target_transform * (y[:, 1] - y[:, 1].min()) / (y[:, 1].max() - y[:, 1].min())
+                    y_ensemble.append(y)
             data[norm_method] = (np.stack(X_ensemble, axis=0), np.stack(y_ensemble, axis=0))
 
         return data

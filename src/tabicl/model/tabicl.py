@@ -70,6 +70,12 @@ class TabICL(nn.Module):
 
     norm_first : bool, default=True
         If True, uses pre-norm architecture across all components
+
+    target_type: str, default="class"
+        Type of target to choose correct y encoder: 'class' (default), or 'surv'
+
+    embed_type: str, default="sin"
+        Type of embedding: sin (sinusoidal, default), or 'ple' (piecewise linear)
     """
 
     def __init__(
@@ -89,6 +95,8 @@ class TabICL(nn.Module):
         dropout: float = 0.0,
         activation: str | callable = "gelu",
         norm_first: bool = True,
+        target_type: str = "class",
+        embed_type: str = "sin",
     ):
         super().__init__()
         self.max_classes = max_classes
@@ -106,6 +114,7 @@ class TabICL(nn.Module):
         self.dropout = dropout
         self.activation = activation
         self.norm_first = norm_first
+        self.target_type = target_type
 
         self.col_embedder = ColEmbedding(
             embed_dim=embed_dim,
@@ -141,6 +150,8 @@ class TabICL(nn.Module):
             dropout=dropout,
             activation=activation,
             norm_first=norm_first,
+            target_type=target_type,
+            embed_type=embed_type,
         )
 
     def _train_forward(

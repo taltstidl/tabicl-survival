@@ -553,7 +553,7 @@ class TabICLClassifier(ClassifierMixin, BaseEstimator):
 
         # Extract class shift offsets from ensemble generator
         class_shift_offsets = []
-        for offsets in self.ensemble_generator_.class_shift_offsets_.values():
+        for offsets in self.ensemble_generator_.target_transforms_.values():
             class_shift_offsets.extend(offsets)
 
         # Determine actual number of ensemble members
